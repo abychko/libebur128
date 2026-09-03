@@ -789,18 +789,56 @@ static size_t find_histogram_index(double energy) {
   return index_min;
 }
 
+/* Sum the independent stereo channels in parallel, never reorder samples
+ * within a channel. In a wrapped window the head precedes the tail, exactly
+ * as in the original scalar loop below. Weighting/gating remain there. */
+static int ebur128_energy_stereo(ebur128_state* st, size_t frames,
+                                  double sums[2]) {
+#if defined(EBUR128_NEON) && (defined(__clang__) || defined(__GNUC__))
+  if (st->channels == 2 && st->d->channel_map[0] != EBUR128_UNUSED &&
+      st->d->channel_map[1] != EBUR128_UNUSED) {
+    size_t end = st->d->audio_data_index / 2;
+    size_t starts[2], ends[2], spans = 1, span, i;
+    float64x2_t acc = vdupq_n_f64(0.0);
+    if (end < frames) {
+      starts[0] = 0; ends[0] = end;
+      starts[1] = st->d->audio_data_frames - (frames - end);
+      ends[1] = st->d->audio_data_frames;
+      spans = 2;
+    } else {
+      starts[0] = end - frames; ends[0] = end;
+    }
+    for (span = 0; span < spans; ++span) {
+      for (i = starts[span]; i < ends[span]; ++i) {
+        float64x2_t samples = vld1q_f64(st->d->audio_data + 2 * i);
+        acc += samples * samples;
+      }
+    }
+    vst1q_f64(sums, acc);
+    return 1;
+  }
+#else
+  (void) st; (void) frames; (void) sums;
+#endif
+  return 0;
+}
+
 static int ebur128_calc_gating_block(ebur128_state* st,
                                      size_t frames_per_block,
                                      double* optional_output) {
   size_t i, c;
   double sum = 0.0;
   double channel_sum;
+  double stereo_sums[2];
+  int stereo = ebur128_energy_stereo(st, frames_per_block, stereo_sums);
   for (c = 0; c < st->channels; ++c) {
     if (st->d->channel_map[c] == EBUR128_UNUSED) {
       continue;
     }
     channel_sum = 0.0;
-    if (st->d->audio_data_index < frames_per_block * st->channels) {
+    if (stereo) {
+      channel_sum = stereo_sums[c];
+    } else if (st->d->audio_data_index < frames_per_block * st->channels) {
       for (i = 0; i < st->d->audio_data_index / st->channels; ++i) {
         channel_sum += st->d->audio_data[i * st->channels + c] *
                        st->d->audio_data[i * st->channels + c];

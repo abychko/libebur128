@@ -81,3 +81,36 @@ The optional benchmark uses 191.5 seconds of synthetic stereo PCM at
 It times K-filter processing without peak/gating work; full-file analysis
 must be measured separately. Before/after compiler and architecture flags
 must match. The existing FIR differential tests remain enabled.
+
+## Stereo window energies
+
+`ebur128_energy_stereo` sums the two channel energies in Float64 NEON lanes.
+It preserves the scalar sample order, including the head-before-tail order
+when a window wraps around the ring. Channel weighting, normalization,
+absolute/relative gates, histograms and linked-list storage remain in the
+original common code. There is no running-sum cache, additional PCM buffer,
+or horizontal reduction that changes summation order.
+
+This path requires ARM64 NEON and Clang/GCC C vector arithmetic. Other
+compilers/layouts, a stereo channel marked UNUSED, and
+`EBUR128_ENABLE_NEON=OFF` use the scalar loops. The weighting for supported
+stereo channel maps (including surround weights) is applied after the sums.
+
+`energy-test` uses an independent scalar gating routine copied from commit
+08a0694. 2088 cases compare energy bits, histogram counts and stored blocks:
+compact odd-sized rings, contiguous/wrapped windows, exact-end positions,
+mono/stereo/multichannel, UNUSED/surround/dual-mono weights, near-threshold,
+subnormal, signed-zero, impulse and large/random finite data. Full-size
+400 ms / 3 s windows are checked at 48/96/192/352.8 kHz. Forced scalar,
+ASan/UBSan and `-ffp-contract=off` are also checked on Apple Clang ARM64.
+
+```sh
+./build-neon/energy-test
+./build-neon/energy-test --benchmark
+```
+
+The optional CPU benchmark uses the window query cadence of 191.5 seconds
+of audio at 48/96/192 kHz, with a warm-up and three alternating backend
+pairs. It excludes filtering/decoding and consumes the results in a checksum.
+Full analysis and metric equivalence across source formats are measured by
+Somaris separately.

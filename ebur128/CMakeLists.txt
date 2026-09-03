@@ -39,7 +39,7 @@ check_c_source_compiles("
 #include <arm_neon.h>
 int main(void) { return (int)vgetq_lane_f64(vdupq_n_f64(0.0), 0); }
 " EBUR128_HAVE_ARM64_NEON)
-option(EBUR128_ENABLE_NEON "Use ARM64 NEON stereo true-peak and Float32 K-filter kernels" ${EBUR128_HAVE_ARM64_NEON})
+option(EBUR128_ENABLE_NEON "Use ARM64 NEON stereo loudness kernels" ${EBUR128_HAVE_ARM64_NEON})
 
 add_library(ebur128 ebur128.c)
 if(EBUR128_ENABLE_NEON AND EBUR128_HAVE_ARM64_NEON)

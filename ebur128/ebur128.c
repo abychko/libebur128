@@ -8,6 +8,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef EBUR128_NEON
+#include <arm_neon.h>
+#endif
+
 /* This can be replaced by any BSD-like queue implementation. */
 #include <sys/queue.h>
 
@@ -208,7 +212,7 @@ static void interp_destroy(interpolator* interp) {
 }
 
 static size_t
-interp_process(interpolator* interp, size_t frames, float* in, float* out) {
+interp_process_scalar(interpolator* interp, size_t frames, float* in, float* out) {
   size_t frame = 0;
   unsigned int chan = 0;
   unsigned int f = 0;
@@ -246,6 +250,41 @@ interp_process(interpolator* interp, size_t frames, float* in, float* out) {
   }
 
   return frames * interp->factor;
+}
+
+/* Channels are independent FIR lanes. Keep the tap order and double
+ * accumulation of the scalar implementation, including its FP contraction
+ * policy. Other layouts and non-ARM64 builds retain the original path. */
+static size_t
+interp_process(interpolator* interp, size_t frames, float* in, float* out) {
+#ifdef EBUR128_NEON
+  if (interp->channels == 2) {
+    size_t frame;
+    unsigned int f, t;
+    for (frame = 0; frame < frames; ++frame) {
+      interp->z[0][interp->zi] = in[0];
+      interp->z[1][interp->zi] = in[1];
+      in += 2;
+      for (f = 0; f < interp->factor; ++f) {
+        float64x2_t acc = vdupq_n_f64(0.0);
+        for (t = 0; t < interp->filter[f].count; ++t) {
+          int i = (int) interp->zi - (int) interp->filter[f].index[t];
+          float32x2_t pair;
+          if (i < 0) i += (int) interp->delay;
+          pair = vset_lane_f32(interp->z[1][i],
+                              vdup_n_f32(interp->z[0][i]), 1);
+          acc = vaddq_f64(acc, vmulq_n_f64(vcvt_f64_f32(pair),
+                                          interp->filter[f].coeff[t]));
+        }
+        vst1_f32(out + 2 * f, vcvt_f32_f64(acc));
+      }
+      out += 2 * interp->factor;
+      if (++interp->zi == interp->delay) interp->zi = 0;
+    }
+    return frames * interp->factor;
+  }
+#endif
+  return interp_process_scalar(interp, frames, in, out);
 }
 
 static int ebur128_init_filter(ebur128_state* st) {

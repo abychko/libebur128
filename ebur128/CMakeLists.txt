@@ -30,7 +30,21 @@ endif()
 set(EBUR128_VERSION_MAJOR 1)
 set(EBUR128_VERSION 1.2.6)
 
+# Test the target compiler, not the host (universal macOS builds use both).
+include(CheckCSourceCompiles)
+check_c_source_compiles("
+#if !defined(__aarch64__) && !defined(_M_ARM64)
+#error ARM64 required
+#endif
+#include <arm_neon.h>
+int main(void) { return (int)vgetq_lane_f64(vdupq_n_f64(0.0), 0); }
+" EBUR128_HAVE_ARM64_NEON)
+option(EBUR128_ENABLE_NEON "Use ARM64 NEON stereo true-peak interpolation" ${EBUR128_HAVE_ARM64_NEON})
+
 add_library(ebur128 ebur128.c)
+if(EBUR128_ENABLE_NEON AND EBUR128_HAVE_ARM64_NEON)
+  target_compile_definitions(ebur128 PRIVATE EBUR128_NEON=1)
+endif()
 set_target_properties(ebur128 PROPERTIES
   SOVERSION ${EBUR128_VERSION_MAJOR}
   VERSION ${EBUR128_VERSION}

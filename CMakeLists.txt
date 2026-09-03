@@ -19,6 +19,9 @@ include(GNUInstallDirs)
 
 add_subdirectory(ebur128)
 add_subdirectory(test)
+if(ENABLE_NEON_TESTS)
+  enable_testing()
+endif()
 
 to_yes_no(SUMMARY_HAS_QUEUE)
 

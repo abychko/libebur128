@@ -12,8 +12,9 @@ See also [loudness-scanner tool](https://github.com/jiixyj/loudness-scanner).
 ARM64 fork
 ----------
 
-This fork adds optional stereo NEON true-peak interpolation. Other channel
-counts and non-ARM64 builds retain the scalar implementation. See
+This fork adds optional stereo NEON true-peak interpolation and a Float32
+stereo K-filter. Unsupported inputs/layouts and non-ARM64 builds retain
+the scalar implementation. See
 [build, equivalence tests and benchmark instructions](doc/arm64-neon.md).
 
 News

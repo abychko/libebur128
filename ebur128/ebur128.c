@@ -655,7 +655,51 @@ static void ebur128_check_true_peak(ebur128_state* st, size_t frames) {
   st->d->v[c][1] = fabs(st->d->v[c][1]) < DBL_MIN ? 0.0 : st->d->v[c][1];
 #endif
 
-#define EBUR128_FILTER(type, min_scale, max_scale)                             \
+/* Float32 is the common PCM analysis input. Independent stereo channels
+ * occupy the two lanes; the recursive sample order and double arithmetic
+ * stay unchanged. Other inputs/layouts retain the scalar loop below. */
+static int ebur128_k_filter_stereo_float(ebur128_state* st,
+                                        const float* src, size_t frames) {
+#if defined(EBUR128_NEON) && (defined(__clang__) || defined(__GNUC__))
+  if (st->channels == 2 && frames &&
+      st->d->channel_map[0] != EBUR128_UNUSED &&
+      st->d->channel_map[1] != EBUR128_UNUSED) {
+    double* output = st->d->audio_data + st->d->audio_data_index;
+    float64x2_t v1 = {st->d->v[0][1], st->d->v[1][1]};
+    float64x2_t v2 = {st->d->v[0][2], st->d->v[1][2]};
+    float64x2_t v3 = {st->d->v[0][3], st->d->v[1][3]};
+    float64x2_t v4 = {st->d->v[0][4], st->d->v[1][4]};
+    size_t i, c;
+    for (i = 0; i < frames; ++i) {
+      /* C vector expressions preserve the scalar compiler's contraction
+       * order. Separate multiply/add intrinsics do not: the difference
+       * feeds back into the next IIR sample. */
+      float64x2_t v0 = vcvt_f64_f32(vld1_f32(src + i * 2)) -
+          v1 * st->d->a[1] - v2 * st->d->a[2] -
+          v3 * st->d->a[3] - v4 * st->d->a[4];
+      float64x2_t result = v0 * st->d->b[0] + v1 * st->d->b[1] +
+          v2 * st->d->b[2] + v3 * st->d->b[3] + v4 * st->d->b[4];
+      vst1q_f64(output + i * 2, result);
+      v4 = v3; v3 = v2; v2 = v1; v1 = v0;
+    }
+    st->d->v[0][0] = st->d->v[0][1] = vgetq_lane_f64(v1, 0);
+    st->d->v[1][0] = st->d->v[1][1] = vgetq_lane_f64(v1, 1);
+    st->d->v[0][2] = vgetq_lane_f64(v2, 0);
+    st->d->v[1][2] = vgetq_lane_f64(v2, 1);
+    st->d->v[0][3] = vgetq_lane_f64(v3, 0);
+    st->d->v[1][3] = vgetq_lane_f64(v3, 1);
+    st->d->v[0][4] = vgetq_lane_f64(v4, 0);
+    st->d->v[1][4] = vgetq_lane_f64(v4, 1);
+    for (c = 0; c < 2; ++c) { FLUSH_MANUALLY }
+    return 1;
+  }
+#else
+  (void) st; (void) src; (void) frames;
+#endif
+  return 0;
+}
+
+#define EBUR128_FILTER(type, min_scale, max_scale, vector_filter)                             \
   static void ebur128_filter_##type(ebur128_state* st, const type* src,        \
                                     size_t frames) {                           \
     static double scaling_factor =                                             \
@@ -691,6 +735,7 @@ static void ebur128_check_true_peak(ebur128_state* st, size_t frames) {
       }                                                                        \
       ebur128_check_true_peak(st, frames);                                     \
     }                                                                          \
+    if (!(vector_filter))                                                     \
     for (c = 0; c < st->channels; ++c) {                                       \
       if (st->d->channel_map[c] == EBUR128_UNUSED) {                           \
         continue;                                                              \
@@ -718,10 +763,10 @@ static void ebur128_check_true_peak(ebur128_state* st, size_t frames) {
     TURN_OFF_FTZ                                                               \
   }
 
-EBUR128_FILTER(short, SHRT_MIN, SHRT_MAX)
-EBUR128_FILTER(int, INT_MIN, INT_MAX)
-EBUR128_FILTER(float, -1.0f, 1.0f)
-EBUR128_FILTER(double, -1.0, 1.0)
+EBUR128_FILTER(short, SHRT_MIN, SHRT_MAX, 0)
+EBUR128_FILTER(int, INT_MIN, INT_MAX, 0)
+EBUR128_FILTER(float, -1.0f, 1.0f, ebur128_k_filter_stereo_float(st, src, frames))
+EBUR128_FILTER(double, -1.0, 1.0, 0)
 
 static double ebur128_energy_to_loudness(double energy) {
   return 10 * (log(energy) / log(10.0)) - 0.691;
